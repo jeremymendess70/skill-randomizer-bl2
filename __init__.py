@@ -2,7 +2,6 @@ import unrealsdk
 from unrealsdk import *
 import sys
 import random
-import json
 import os
 import re
 
@@ -17,27 +16,38 @@ class CrossSkillRandomizer(BL2MOD):
     Author: str = "Abahbob"
     SupportedGames = Game.BL2
     LocalModDir: str = os.path.dirname(os.path.realpath(__file__))
+    SeedFileName: str = "current_seed.txt"
     SeedBroadcastPattern = re.compile(r"\[CCSR_SEED:(-?\d+)\]")
 
     def __init__(self, seed=None):
-        self.Seed = seed
-        if seed:
-            self.Name = self.Name.format(self.Seed)
-        else:
+        self.Seed = seed if seed is not None else self.LoadSavedSeed()
+        if self.Seed is None:
             self.Name = self.Name.format("New Seed")
+        else:
+            self.Name = self.Name.format(self.Seed)
 
-    def RecordSeed(self) -> None:
-        with open(self.LocalModDir + "\\log.json", "r+") as f:
-            history = json.loads(f.read())
-            if self.Seed in history:
-                return
-            history.append(self.Seed)
-            f.seek(0)
-            f.write(json.dumps(history))
-            f.truncate()
-            self.Name = "Cross Class Skill Randomizer ({})".format(self.Seed)
-            NewRando = CrossSkillRandomizer()
-            unrealsdk.Mods.insert(0, NewRando)
+    def GetSeedFilePath(self) -> str:
+        return self.LocalModDir + "\\" + self.SeedFileName
+
+    def LoadSavedSeed(self):
+        seed_path = self.GetSeedFilePath()
+        if not os.path.isfile(seed_path):
+            return None
+
+        with open(seed_path, "r") as f:
+            raw_seed = f.read().strip()
+            if raw_seed == "":
+                return None
+
+        try:
+            return int(raw_seed)
+        except ValueError:
+            unrealsdk.Log("Invalid saved seed '{}', ignoring seed file.".format(raw_seed))
+            return None
+
+    def SaveSeed(self) -> None:
+        with open(self.GetSeedFilePath(), "w") as f:
+            f.write(str(self.Seed))
 
     def SetSeed(self, seed: int, persist: bool = True) -> None:
         self.Seed = seed
@@ -45,7 +55,7 @@ class CrossSkillRandomizer(BL2MOD):
         self.Name = "Cross Class Skill Randomizer ({})".format(self.Seed)
         unrealsdk.Log("Cross Class Skill Randomizer seed set to '{}'".format(self.Seed))
         if persist:
-            self.RecordSeed()
+            self.SaveSeed()
 
     def ShareSeedInChat(self, caller: UObject) -> None:
         if self.Seed is None:
@@ -54,7 +64,14 @@ class CrossSkillRandomizer(BL2MOD):
 
     @Hook("WillowGame.WillowPlayerController.ConsoleCommand")
     def HandleConsoleSeedCommand(self, caller: UObject, function: UFunction, params: FStruct) -> bool:
-        command = str(params.Command).strip()
+        return self.TryHandleSeedCommand(caller, params.Command)
+
+    @Hook("Engine.PlayerController.ConsoleCommand")
+    def HandleConsoleSeedCommandEngine(self, caller: UObject, function: UFunction, params: FStruct) -> bool:
+        return self.TryHandleSeedCommand(caller, params.Command)
+
+    def TryHandleSeedCommand(self, caller: UObject, raw_command) -> bool:
+        command = str(raw_command).strip()
         parts = command.split()
         if len(parts) == 0 or parts[0].lower() != "seed":
             return True
@@ -391,12 +408,3 @@ class CrossSkillRandomizer(BL2MOD):
 rando = CrossSkillRandomizer()
 
 RegisterMod(rando)
-
-if os.path.isfile(rando.LocalModDir + "\\log.json"):
-    with open(rando.LocalModDir + "\\log.json", "r") as f:
-        seeds = json.loads(f.read())
-        for seed in seeds:
-            RegisterMod(CrossSkillRandomizer(seed))
-else:
-    with open(rando.LocalModDir + "\\log.json", "w") as f:
-        f.write("[]")
