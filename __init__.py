@@ -4,6 +4,7 @@ import sys
 import random
 import json
 import os
+import re
 
 from ..ModManager import BL2MOD, RegisterMod
 from Mods.ModMenu import Game, Hook
@@ -16,6 +17,7 @@ class CrossSkillRandomizer(BL2MOD):
     Author: str = "Abahbob"
     SupportedGames = Game.BL2
     LocalModDir: str = os.path.dirname(os.path.realpath(__file__))
+    SeedBroadcastPattern = re.compile(r"\[CCSR_SEED:(-?\d+)\]")
 
     def __init__(self, seed=None):
         self.Seed = seed
@@ -37,13 +39,60 @@ class CrossSkillRandomizer(BL2MOD):
             NewRando = CrossSkillRandomizer()
             unrealsdk.Mods.insert(0, NewRando)
 
+    def SetSeed(self, seed: int, persist: bool = True) -> None:
+        self.Seed = seed
+        self.RNG = random.Random(self.Seed)
+        self.Name = "Cross Class Skill Randomizer ({})".format(self.Seed)
+        unrealsdk.Log("Cross Class Skill Randomizer seed set to '{}'".format(self.Seed))
+        if persist:
+            self.RecordSeed()
+
+    def ShareSeedInChat(self, caller: UObject) -> None:
+        if self.Seed is None:
+            return
+        caller.ConsoleCommand("say [CCSR_SEED:{}]".format(self.Seed))
+
+    @Hook("WillowGame.WillowPlayerController.ConsoleCommand")
+    def HandleConsoleSeedCommand(self, caller: UObject, function: UFunction, params: FStruct) -> bool:
+        command = str(params.Command).strip()
+        parts = command.split()
+        if len(parts) == 0 or parts[0].lower() != "seed":
+            return True
+
+        if len(parts) != 2:
+            unrealsdk.Log("Usage: seed <number>")
+            return False
+
+        try:
+            new_seed = int(parts[1])
+        except ValueError:
+            unrealsdk.Log("Invalid seed '{}'. Usage: seed <number>".format(parts[1]))
+            return False
+
+        self.SetSeed(new_seed)
+        self.ShareSeedInChat(caller)
+        unrealsdk.Log("Seed changed. Re-open your skill tree to apply the new randomization.")
+        return False
+
+    @Hook("WillowGame.WillowPlayerController.ClientMessage")
+    def ReceiveSeedFromChat(self, caller: UObject, function: UFunction, params: FStruct) -> bool:
+        message = str(params.S)
+        seed_match = self.SeedBroadcastPattern.search(message)
+        if seed_match is None:
+            return True
+
+        shared_seed = int(seed_match.group(1))
+        if self.Seed == shared_seed:
+            return True
+
+        self.SetSeed(shared_seed)
+        unrealsdk.Log("Applied shared party seed '{}' and saved it for solo play.".format(shared_seed))
+        return True
+
     @Hook("WillowGame.PlayerSkillTree.Initialize")
     def InjectSkills(self, caller: UObject, function: UFunction, params: FStruct) -> bool:
         if not self.Seed:
-            self.Seed = random.randrange(sys.maxsize)
-            unrealsdk.Log("Randomizing with seed '{}'".format(self.Seed))
-            self.RNG = random.Random(self.Seed)
-            self.RecordSeed()
+            self.SetSeed(random.randrange(sys.maxsize))
         else:
             self.RNG = random.Random(self.Seed)
         self.RandomizeTree(params.SkillTreeDef)
