@@ -19,6 +19,7 @@ class CrossSkillRandomizer(BL2MOD):
 
     def __init__(self, seed=None):
         self.Seed = seed
+        self.SkillGradeOverrides = {}
         if seed:
             self.Name = self.Name.format(self.Seed)
         else:
@@ -49,6 +50,29 @@ class CrossSkillRandomizer(BL2MOD):
         self.RandomizeTree(params.SkillTreeDef)
         return True
 
+    @Hook("WillowGame.WillowPlayerController.ConsoleCommand")
+    def SetSeedFromConsole(self, caller: UObject, function: UFunction, params: FStruct) -> bool:
+        command = params.Command.strip()
+        if not command.lower().startswith("seed "):
+            return True
+
+        parts = command.split()
+        if len(parts) != 2:
+            unrealsdk.Log("Usage: seed <number>")
+            return False
+
+        try:
+            self.Seed = int(parts[1])
+        except ValueError:
+            unrealsdk.Log("Seed must be a number. Example: seed 2")
+            return False
+
+        self.SkillGradeOverrides = {}
+        self.Name = "Cross Class Skill Randomizer ({})".format(self.Seed)
+        unrealsdk.Log("Skill Randomizer seed set to '{}'".format(self.Seed))
+        self.RecordSeed()
+        return False
+
     def PreloadPackages(self) -> None:
         packages = [
             "GD_Assassin_Streaming_SF",
@@ -65,10 +89,25 @@ class CrossSkillRandomizer(BL2MOD):
     def RandomizeTree(self, SkillTreeDef) -> None:
         # SkillTreeDef.Root = GD_<Class>_Skills.SkillTree.Branch_ActionSkill_<ActionSkill>
         CurrentClass = SkillTreeDef.Root.Outer.Outer.GetName().split("_")[-2]
-        self.ValidSkills = self.ClassSkills[CurrentClass].copy()
-        self.ValidSkills += self.GlobalSkills
+        self.ValidSkills = self.GetClassSkillPool(CurrentClass)
         for Branch in SkillTreeDef.Root.Children:
             self.RandomizeBranch(Branch)
+
+    def GetClassSkillPool(self, current_class: str):
+        class_prefix_map = {
+            "Soldier": ("GD_Soldier_Skills.",),
+            "Assassin": ("GD_Assassin_Skills.",),
+            "Siren": ("GD_Siren_Skills.",),
+            "Mercenary": ("GD_Mercenary_Skills.",),
+            "Lilac": ("GD_Lilac_Skills_",),
+            "Mechromancer": ("GD_Tulip_Mechromancer_Skills.",),
+        }
+        prefixes = class_prefix_map[current_class]
+        pool = []
+        for skill in self.GlobalSkills + self.ClassSkills[current_class]:
+            if skill.startswith(prefixes) and skill not in pool:
+                pool.append(skill)
+        return pool
 
     def RandomizeBranch(self, SkillTreeBranchDef) -> None:
         self.PreloadPackages()
@@ -89,6 +128,9 @@ class CrossSkillRandomizer(BL2MOD):
                     SkillDefNum = self.RNG.randint(0, len(self.ValidSkills) - 1)
                     SkillDefName = self.ValidSkills.pop(SkillDefNum)
                     SkillDef = unrealsdk.FindObject("SkillDefinition", SkillDefName)
+                    if SkillDefName not in self.SkillGradeOverrides:
+                        self.SkillGradeOverrides[SkillDefName] = self.RNG.randint(1, 50)
+                    SkillDef.MaxGrade = self.SkillGradeOverrides[SkillDefName]
                     MaxPoints += SkillDef.MaxGrade
                     NewSkills.append(SkillDef)
                     HasHellborn = HasHellborn or "Hellborn" in SkillDef.GetFullName()
